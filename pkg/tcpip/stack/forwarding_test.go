@@ -54,6 +54,9 @@ type fwdTestNetworkEndpoint struct {
 }
 
 var _ NetworkEndpoint = (*fwdTestNetworkEndpoint)(nil)
+var _ NetworkProtocol = (*fwdTestNetworkProtocol)(nil)
+var _ NetworkEndpointStats = (*fwdTestNetworkEndpointStats)(nil)
+var _ LinkAddressResolver = (*fwdTestNetworkProtocol)(nil)
 
 func (*fwdTestNetworkEndpoint) Enable() *tcpip.Error {
 	return nil
@@ -104,7 +107,7 @@ func (f *fwdTestNetworkEndpoint) MaxHeaderLength() uint16 {
 	return f.nic.MaxHeaderLength() + fwdTestNetHeaderLen
 }
 
-func (f *fwdTestNetworkEndpoint) PseudoHeaderChecksum(protocol tcpip.TransportProtocolNumber, dstAddr tcpip.Address) uint16 {
+func (*fwdTestNetworkEndpoint) PseudoHeaderChecksum(protocol tcpip.TransportProtocolNumber, dstAddr tcpip.Address) uint16 {
 	return 0
 }
 
@@ -124,7 +127,7 @@ func (f *fwdTestNetworkEndpoint) WritePacket(r *Route, gso *GSO, params NetworkH
 }
 
 // WritePackets implements LinkEndpoint.WritePackets.
-func (f *fwdTestNetworkEndpoint) WritePackets(r *Route, gso *GSO, pkts PacketBufferList, params NetworkHeaderParams) (int, *tcpip.Error) {
+func (*fwdTestNetworkEndpoint) WritePackets(r *Route, gso *GSO, pkts PacketBufferList, params NetworkHeaderParams) (int, *tcpip.Error) {
 	panic("not implemented")
 }
 
@@ -140,6 +143,16 @@ func (f *fwdTestNetworkEndpoint) WriteHeaderIncludedPacket(r *Route, pkt *Packet
 func (f *fwdTestNetworkEndpoint) Close() {
 	f.AddressableEndpointState.Cleanup()
 }
+
+// Stats implements stack.NetworkEndpoint.
+func (*fwdTestNetworkEndpoint) Stats() NetworkEndpointStats {
+	return &fwdTestNetworkEndpointStats{}
+}
+
+type fwdTestNetworkEndpointStats struct{}
+
+// IsNetworkEndpointStats implements stack.NetworkEndpointStats.
+func (*fwdTestNetworkEndpointStats) IsNetworkEndpointStats() {}
 
 // fwdTestNetworkProtocol is a network-layer protocol that implements Address
 // resolution.
@@ -158,18 +171,15 @@ type fwdTestNetworkProtocol struct {
 	}
 }
 
-var _ NetworkProtocol = (*fwdTestNetworkProtocol)(nil)
-var _ LinkAddressResolver = (*fwdTestNetworkProtocol)(nil)
-
-func (f *fwdTestNetworkProtocol) Number() tcpip.NetworkProtocolNumber {
+func (*fwdTestNetworkProtocol) Number() tcpip.NetworkProtocolNumber {
 	return fwdTestNetNumber
 }
 
-func (f *fwdTestNetworkProtocol) MinimumPacketSize() int {
+func (*fwdTestNetworkProtocol) MinimumPacketSize() int {
 	return fwdTestNetHeaderLen
 }
 
-func (f *fwdTestNetworkProtocol) DefaultPrefixLen() int {
+func (*fwdTestNetworkProtocol) DefaultPrefixLen() int {
 	return fwdTestNetDefaultPrefixLen
 }
 
