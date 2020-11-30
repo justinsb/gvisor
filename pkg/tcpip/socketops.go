@@ -15,10 +15,20 @@
 package tcpip
 
 import (
+	"fmt"
+	"math"
 	"sync/atomic"
 
 	"gvisor.dev/gvisor/pkg/sync"
 )
+
+// PacketOverheadFactor is used to multiply the value provided by the user on a
+// SetSockOpt for setting the send/receive buffer sizes sockets.
+const PacketOverheadFactor = 2
+
+// TCPProtocolNumber is the TCP protocol number. We cannot import header or tcp
+// package as it will cause a cycle.
+const TCPProtocolNumber = 6
 
 // SocketOptionsHandler holds methods that help define endpoint specific
 // behavior for socket level socket options. These must be implemented by
@@ -48,6 +58,12 @@ type SocketOptionsHandler interface {
 
 	// HasNIC is invoked to check if the NIC is valid for SO_BINDTODEVICE.
 	HasNIC(v int32) bool
+
+	// OnSendBufferSizeOptionGet is invoked to get the SO_SNDBUFSIZE.
+	OnSendBufferSizeOptionGet() (int64, *Error)
+
+	// IsUnixSocket is invoked to check if the socket is of unix domain.
+	IsUnixSocket() bool
 }
 
 // DefaultSocketOptionsHandler is an embeddable type that implements no-op
@@ -84,12 +100,52 @@ func (*DefaultSocketOptionsHandler) HasNIC(int32) bool {
 	return false
 }
 
+// OnSendBufferSizeOptionGet implements
+// SocketOptionsHandler.OnSendBufferSizeOptionGet.
+func (*DefaultSocketOptionsHandler) OnSendBufferSizeOptionGet() (int64, *Error) {
+	return 0, nil
+}
+
+// IsUnixSocket implements SocketOptionsHandler.IsUnixSocket.
+func (*DefaultSocketOptionsHandler) IsUnixSocket() bool {
+	return false
+}
+
+// StackHandler holds methods to access the stack options. These must be
+// implemented by the stack.
+type StackHandler interface {
+	// Option allows retrieving stack wide options.
+	Option(option interface{}) *Error
+
+	// TransportProtocolOption allows retrieving individual protocol level
+	// option values.
+	TransportProtocolOption(proto TransportProtocolNumber, option GettableTransportProtocolOption) *Error
+}
+
+// DefaultStackHandler is an embeddable type that implements no-op
+// implementations for StackHandler methods.
+type DefaultStackHandler struct{}
+
+var _ StackHandler = (*DefaultStackHandler)(nil)
+
+// Option implements StackHandler.Option.
+func (*DefaultStackHandler) Option(option interface{}) *Error {
+	return nil
+}
+
+// TransportProtocolOption implements StackHandler.TransportProtocolOption.
+func (*DefaultStackHandler) TransportProtocolOption(proto TransportProtocolNumber, option GettableTransportProtocolOption) *Error {
+	return nil
+}
+
 // SocketOptions contains all the variables which store values for SOL_SOCKET,
 // SOL_IP, SOL_IPV6 and SOL_TCP level options.
 //
 // +stateify savable
 type SocketOptions struct {
 	handler SocketOptionsHandler
+	// StackHandler is initialized at the creation time and will not change.
+	stackHandler StackHandler `state:"manual"`
 
 	// These fields are accessed and modified using atomic operations.
 
@@ -170,6 +226,9 @@ type SocketOptions struct {
 	// bindToDevice determines the device to which the socket is bound.
 	bindToDevice int32
 
+	// sendBufferSize determines the send buffer size for this socket.
+	sendBufferSize int64
+
 	// mu protects the access to the below fields.
 	mu sync.Mutex `state:"nosave"`
 
@@ -180,8 +239,9 @@ type SocketOptions struct {
 
 // InitHandler initializes the handler. This must be called before using the
 // socket options utility.
-func (so *SocketOptions) InitHandler(handler SocketOptionsHandler) {
+func (so *SocketOptions) InitHandler(handler SocketOptionsHandler, stack StackHandler) {
 	so.handler = handler
+	so.stackHandler = stack
 }
 
 func storeAtomicBool(addr *uint32, v bool) {
@@ -517,4 +577,56 @@ func (so *SocketOptions) SetBindToDevice(bindToDevice int32) *Error {
 
 	atomic.StoreInt32(&so.bindToDevice, bindToDevice)
 	return nil
+}
+
+// GetSendBufferSize gets value for SO_SNDBUF option.
+func (so *SocketOptions) GetSendBufferSize() (int64, *Error) {
+	if so.handler.IsUnixSocket() {
+		return so.handler.OnSendBufferSizeOptionGet()
+	}
+	return atomic.LoadInt64(&so.sendBufferSize), nil
+}
+
+// SetSendBufferSize sets value for SO_SNDBUF option. notify indicates if the
+// stack handler should be invoked to set the send buffer size.
+func (so *SocketOptions) SetSendBufferSize(sendBufferSize int64, notify, tcpSocket bool) {
+	v := sendBufferSize
+	if notify {
+		// TODO(b/176170271): Notify waiters after size has grown.
+		// Make sure the send buffer size is within the min and max
+		// allowed.
+		var min int64
+		var max int64
+		if tcpSocket {
+			var ss TCPSendBufferSizeRangeOption
+			if err := so.stackHandler.TransportProtocolOption(TCPProtocolNumber, &ss); err != nil {
+				panic(fmt.Sprintf("s.TransportProtocolOption(%d, %#v) = %s", TCPProtocolNumber, ss, err))
+			}
+			min = int64(ss.Min)
+			max = int64(ss.Max)
+		} else {
+			var ss SendBufferSizeOption
+			if err := so.stackHandler.Option(&ss); err != nil {
+				panic(fmt.Sprintf("s.Option(%#v) = %s", ss, err))
+			}
+			min = int64(ss.Min)
+			max = int64(ss.Max)
+		}
+
+		// Validate the send buffer size with min and max values.
+		// Multiply it by factor of 2.
+		if v > max {
+			v = max
+		}
+
+		if v < math.MaxInt32/PacketOverheadFactor {
+			v *= PacketOverheadFactor
+			if v < min {
+				v = min
+			}
+		} else {
+			v = math.MaxInt32
+		}
+	}
+	atomic.StoreInt64(&so.sendBufferSize, v)
 }

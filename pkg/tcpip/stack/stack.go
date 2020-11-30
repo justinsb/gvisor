@@ -370,6 +370,8 @@ func (u *uniqueIDGenerator) UniqueID() uint64 {
 // Stack is a networking stack, with all supported protocols, NICs, and route
 // table.
 type Stack struct {
+	tcpip.DefaultStackHandler
+
 	transportProtocols map[tcpip.TransportProtocolNumber]*transportProtocolState
 	networkProtocols   map[tcpip.NetworkProtocolNumber]NetworkProtocol
 	linkAddrResolvers  map[tcpip.NetworkProtocolNumber]LinkAddressResolver
@@ -450,7 +452,7 @@ type Stack struct {
 
 	// sendBufferSize holds the min/default/max send buffer sizes for
 	// endpoints other than TCP.
-	sendBufferSize SendBufferSizeOption
+	sendBufferSize tcpip.SendBufferSizeOption
 
 	// receiveBufferSize holds the min/default/max receive buffer sizes for
 	// endpoints other than TCP.
@@ -653,7 +655,7 @@ func New(opts Options) *Stack {
 		uniqueIDGenerator:  opts.UniqueID,
 		nudDisp:            opts.NUDDisp,
 		randomGenerator:    mathrand.New(randSrc),
-		sendBufferSize: SendBufferSizeOption{
+		sendBufferSize: tcpip.SendBufferSizeOption{
 			Min:     MinBufferSize,
 			Default: DefaultBufferSize,
 			Max:     DefaultMaxBufferSize,
