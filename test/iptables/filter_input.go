@@ -51,6 +51,12 @@ func init() {
 	RegisterTestCase(FilterInputInvertDestination{})
 	RegisterTestCase(FilterInputSource{})
 	RegisterTestCase(FilterInputInvertSource{})
+	RegisterTestCase(FilterInputInterfaceAccept{})
+	RegisterTestCase(FilterInputInterfaceDrop{})
+	RegisterTestCase(FilterInputInterface{})
+	RegisterTestCase(FilterInputInterfaceBeginsWith{})
+	RegisterTestCase(FilterInputInterfaceInvertDrop{})
+	RegisterTestCase(FilterInputInterfaceInvertAccept{})
 }
 
 // FilterInputDropUDP tests that we can drop UDP traffic.
@@ -743,4 +749,199 @@ func (FilterInputInvertSource) ContainerAction(ctx context.Context, ip net.IP, i
 // LocalAction implements TestCase.LocalAction.
 func (FilterInputInvertSource) LocalAction(ctx context.Context, ip net.IP, ipv6 bool) error {
 	return sendUDPLoop(ctx, ip, acceptPort)
+}
+
+// FilterInputInterfaceAccept tests that packets are accepted from interface
+// matching the iptables rule.
+type FilterInputInterfaceAccept struct{ localCase }
+
+// Name implements TestCase.Name.
+func (FilterInputInterfaceAccept) Name() string {
+	return "FilterInputInterfaceAccept"
+}
+
+// ContainerAction implements TestCase.ContainerAction.
+func (FilterInputInterfaceAccept) ContainerAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	ifname, ok := getInterfaceName()
+	if !ok {
+		return fmt.Errorf("no interface is present, except loopback")
+	}
+	if err := filterTable(ipv6, "-A", "INPUT", "-p", "udp", "-i", ifname, "-j", "ACCEPT"); err != nil {
+		return err
+	}
+
+	// Listen for UDP packets on another port.
+	if err := listenUDP(ctx, acceptPort); err != nil {
+		return fmt.Errorf("packets on port %d should be allowed, but encountered an error: %v", acceptPort, err)
+	}
+
+	return nil
+}
+
+// LocalAction implements TestCase.LocalAction.
+func (FilterInputInterfaceAccept) LocalAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	return sendUDPLoop(ctx, ip, acceptPort)
+}
+
+// FilterInputInterfaceDrop tests that packets are dropped from interface
+// matching the iptables rule.
+type FilterInputInterfaceDrop struct{ localCase }
+
+// Name implements TestCase.Name.
+func (FilterInputInterfaceDrop) Name() string {
+	return "FilterInputInterfaceDrop"
+}
+
+// ContainerAction implements TestCase.ContainerAction.
+func (FilterInputInterfaceDrop) ContainerAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	ifname, ok := getInterfaceName()
+	if !ok {
+		return fmt.Errorf("no interface is present, except loopback")
+	}
+	if err := filterTable(ipv6, "-A", "INPUT", "-p", "udp", "-i", ifname, "-j", "DROP"); err != nil {
+		return err
+	}
+
+	// Listen for all packets on acceptPort.
+	timedCtx, cancel := context.WithTimeout(ctx, NegativeTimeout)
+	defer cancel()
+	if err := listenUDP(timedCtx, acceptPort); err == nil {
+		return fmt.Errorf("packets should have been dropped, but got a packet")
+	} else if !errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("error reading: %v", err)
+	}
+
+	// At this point we know that reading timed out and never received a
+	// packet.
+	return nil
+}
+
+// LocalAction implements TestCase.LocalAction.
+func (FilterInputInterfaceDrop) LocalAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	return sendUDPLoop(ctx, ip, acceptPort)
+}
+
+// FilterInputInterface tests that packets are not dropped from interface which
+// is not matching the interface name in the iptables rule.
+type FilterInputInterface struct{ localCase }
+
+// Name implements TestCase.Name.
+func (FilterInputInterface) Name() string {
+	return "FilterInputInterface"
+}
+
+// ContainerAction implements TestCase.ContainerAction.
+func (FilterInputInterface) ContainerAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	if err := filterTable(ipv6, "-A", "INPUT", "-p", "udp", "-i", "lo", "-j", "DROP"); err != nil {
+		return err
+	}
+
+	// Listen for UDP packets on another port.
+	if err := listenUDP(ctx, acceptPort); err != nil {
+		return fmt.Errorf("packets on port %d should be allowed, but encountered an error: %v", acceptPort, err)
+	}
+
+	return nil
+}
+
+// LocalAction implements TestCase.LocalAction.
+func (FilterInputInterface) LocalAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	return sendUDPLoop(ctx, ip, acceptPort)
+}
+
+// FilterInputInterfaceBeginsWith tests that packets are dropped from an
+// interface which begins with the given interface name.
+type FilterInputInterfaceBeginsWith struct{ localCase }
+
+// Name implements TestCase.Name.
+func (FilterInputInterfaceBeginsWith) Name() string {
+	return "FilterInputInterfaceBeginsWith"
+}
+
+// ContainerAction implements TestCase.ContainerAction.
+func (FilterInputInterfaceBeginsWith) ContainerAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	if err := filterTable(ipv6, "-A", "INPUT", "-p", "udp", "-i", "e+", "-j", "DROP"); err != nil {
+		return err
+	}
+
+	// Listen for all packets on acceptPort.
+	timedCtx, cancel := context.WithTimeout(ctx, NegativeTimeout)
+	defer cancel()
+	if err := listenUDP(timedCtx, acceptPort); err == nil {
+		return fmt.Errorf("packets should have been dropped, but got a packet")
+	} else if !errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("error reading: %v", err)
+	}
+
+	// At this point we know that reading timed out and never received a
+	// packet.
+	return nil
+}
+
+// LocalAction implements TestCase.LocalAction.
+func (FilterInputInterfaceBeginsWith) LocalAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	return sendUDPLoop(ctx, ip, acceptPort)
+}
+
+// FilterInputInterfaceInvertDrop tests that we selectively drop packets from
+// interface not matching the interface name.
+type FilterInputInterfaceInvertDrop struct{ baseCase }
+
+// Name implements TestCase.Name.
+func (FilterInputInterfaceInvertDrop) Name() string {
+	return "FilterInputInterfaceInvertDrop"
+}
+
+// ContainerAction implements TestCase.ContainerAction.
+func (FilterInputInterfaceInvertDrop) ContainerAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	if err := filterTable(ipv6, "-A", "INPUT", "-p", "tcp", "!", "-i", "lo", "-j", "DROP"); err != nil {
+		return err
+	}
+
+	// Listen for TCP packets on accept port.
+	timedCtx, cancel := context.WithTimeout(ctx, NegativeTimeout)
+	defer cancel()
+	/* TODO */
+	if err := listenTCP(timedCtx, acceptPort); err == nil {
+		return fmt.Errorf("connection on port %d should not be accepted, but got accepted", acceptPort)
+	} else if !errors.Is(err, context.DeadlineExceeded) {
+		return fmt.Errorf("error reading: %v", err)
+	}
+
+	return nil
+}
+
+// LocalAction implements TestCase.LocalAction.
+func (FilterInputInterfaceInvertDrop) LocalAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	timedCtx, cancel := context.WithTimeout(ctx, NegativeTimeout)
+	defer cancel()
+	if err := connectTCP(timedCtx, ip, acceptPort); err == nil {
+		return fmt.Errorf("connection destined to port %d should not be accepted, but got accepted", acceptPort)
+	}
+
+	return nil
+}
+
+// FilterInputInterfaceInvertAccept tests that we can selectively accept packets
+// not matching the specific incoming interface.
+type FilterInputInterfaceInvertAccept struct{ baseCase }
+
+// Name implements TestCase.Name.
+func (FilterInputInterfaceInvertAccept) Name() string {
+	return "FilterInputInterfaceInvertAccept"
+}
+
+// ContainerAction implements TestCase.ContainerAction.
+func (FilterInputInterfaceInvertAccept) ContainerAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	if err := filterTable(ipv6, "-A", "INPUT", "-p", "tcp", "!", "-i", "lo", "-j", "ACCEPT"); err != nil {
+		return err
+	}
+
+	// Listen for TCP packets on accept port.
+	return listenTCP(ctx, acceptPort)
+}
+
+// LocalAction implements TestCase.LocalAction.
+func (FilterInputInterfaceInvertAccept) LocalAction(ctx context.Context, ip net.IP, ipv6 bool) error {
+	return connectTCP(ctx, ip, acceptPort)
 }
