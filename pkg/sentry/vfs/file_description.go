@@ -454,10 +454,10 @@ type FileDescriptionImpl interface {
 	UnlockBSD(ctx context.Context, uid lock.UniqueID) error
 
 	// LockPOSIX tries to acquire a POSIX-style advisory file lock.
-	LockPOSIX(ctx context.Context, uid lock.UniqueID, t lock.LockType, start, length uint64, whence int16, block lock.Blocker) error
+	LockPOSIX(ctx context.Context, uid lock.UniqueID, t lock.LockType, r lock.LockRange, block lock.Blocker) error
 
 	// UnlockPOSIX releases a POSIX-style advisory file lock.
-	UnlockPOSIX(ctx context.Context, uid lock.UniqueID, start, length uint64, whence int16) error
+	UnlockPOSIX(ctx context.Context, uid lock.UniqueID, r lock.LockRange) error
 }
 
 // Dirent holds the information contained in struct linux_dirent64.
@@ -802,13 +802,21 @@ func (fd *FileDescription) UnlockBSD(ctx context.Context) error {
 }
 
 // LockPOSIX locks a POSIX-style file range lock.
-func (fd *FileDescription) LockPOSIX(ctx context.Context, uid lock.UniqueID, t lock.LockType, start, end uint64, whence int16, block lock.Blocker) error {
-	return fd.impl.LockPOSIX(ctx, uid, t, start, end, whence, block)
+func (fd *FileDescription) LockPOSIX(ctx context.Context, uid lock.UniqueID, t lock.LockType, start, length uint64, whence int16, block lock.Blocker) error {
+	r, err := computeRange(ctx, fd, start, length, whence)
+	if err != nil {
+		return err
+	}
+	return fd.impl.LockPOSIX(ctx, uid, t, r, block)
 }
 
 // UnlockPOSIX unlocks a POSIX-style file range lock.
-func (fd *FileDescription) UnlockPOSIX(ctx context.Context, uid lock.UniqueID, start, end uint64, whence int16) error {
-	return fd.impl.UnlockPOSIX(ctx, uid, start, end, whence)
+func (fd *FileDescription) UnlockPOSIX(ctx context.Context, uid lock.UniqueID, start, length uint64, whence int16) error {
+	r, err := computeRange(ctx, fd, start, length, whence)
+	if err != nil {
+		return err
+	}
+	return fd.impl.UnlockPOSIX(ctx, uid, r)
 }
 
 // A FileAsync sends signals to its owner when w is ready for IO. This is only

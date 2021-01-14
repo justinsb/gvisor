@@ -47,7 +47,6 @@ import (
 	"gvisor.dev/gvisor/pkg/merkletree"
 	"gvisor.dev/gvisor/pkg/refsvfs2"
 	"gvisor.dev/gvisor/pkg/sentry/arch"
-	fslock "gvisor.dev/gvisor/pkg/sentry/fs/lock"
 	"gvisor.dev/gvisor/pkg/sentry/kernel"
 	"gvisor.dev/gvisor/pkg/sentry/kernel/auth"
 	"gvisor.dev/gvisor/pkg/sentry/vfs"
@@ -1102,16 +1101,6 @@ func (fd *fileDescription) PWrite(ctx context.Context, src usermem.IOSequence, o
 // Write implements vfs.FileDescriptionImpl.Write.
 func (fd *fileDescription) Write(ctx context.Context, src usermem.IOSequence, opts vfs.WriteOptions) (int64, error) {
 	return 0, syserror.EROFS
-}
-
-// LockPOSIX implements vfs.FileDescriptionImpl.LockPOSIX.
-func (fd *fileDescription) LockPOSIX(ctx context.Context, uid fslock.UniqueID, t fslock.LockType, start, length uint64, whence int16, block fslock.Blocker) error {
-	return fd.lowerFD.LockPOSIX(ctx, uid, t, start, length, whence, block)
-}
-
-// UnlockPOSIX implements vfs.FileDescriptionImpl.UnlockPOSIX.
-func (fd *fileDescription) UnlockPOSIX(ctx context.Context, uid fslock.UniqueID, start, length uint64, whence int16) error {
-	return fd.lowerFD.UnlockPOSIX(ctx, uid, start, length, whence)
 }
 
 // FileReadWriteSeeker is a helper struct to pass a vfs.FileDescription as
