@@ -41,11 +41,15 @@ type packetsPendingLinkResolution struct {
 	sync.Mutex
 
 	// The packets to send once the resolver completes.
+	//
+	// The link resolution channel is used as the key for this map.
 	packets map[<-chan struct{}][]pendingPacket
 
 	// FIFO of channels used to cancel the oldest goroutine waiting for
 	// link-address resolution.
-	cancelChans []chan struct{}
+	//
+	// cancelChans holds the same channels that are used as keys to packets.
+	cancelChans []<-chan struct{}
 }
 
 func (f *packetsPendingLinkResolution) init() {
@@ -54,9 +58,36 @@ func (f *packetsPendingLinkResolution) init() {
 	f.packets = make(map[<-chan struct{}][]pendingPacket)
 }
 
+// dequeue dequeues any pending packets associated with the given link
+// resolution channel.
+//
+// If link resolution was successful, packets will be written and sent to the
+// given remote link address.
+//
+// dequeue will send the packets on a new goroutine.
+func (f *packetsPendingLinkResolution) dequeue(ch <-chan struct{}, linkAddr tcpip.LinkAddress, success bool) {
+	f.Lock()
+	packets, ok := f.packets[ch]
+	delete(f.packets, ch)
+	f.Unlock()
+
+	if !ok {
+		return
+	}
+
+	go dequeuePackets(packets, linkAddr, success)
+}
+
+// enqueue enqueues a packet to be sent once link resolution completes.
+//
+// The channel provided is the link resolution channel for the neighbor that
+// link resolution is being performed for.
+//
+// If the maximum number of pending resolutions is reached, the packets
+// associated with the oldest link resolution will be dequeued as if they failed
+// link resolution.
 func (f *packetsPendingLinkResolution) enqueue(ch <-chan struct{}, r *Route, proto tcpip.NetworkProtocolNumber, pkt *PacketBuffer) {
 	f.Lock()
-	defer f.Unlock()
 
 	packets, ok := f.packets[ch]
 	if len(packets) == maxPendingPacketsPerResolution {
@@ -68,6 +99,7 @@ func (f *packetsPendingLinkResolution) enqueue(ch <-chan struct{}, r *Route, pro
 	}
 
 	if l := len(packets); l >= maxPendingPacketsPerResolution {
+		f.Unlock()
 		panic(fmt.Sprintf("max pending packets for resolution reached; got %d packets, max = %d", l, maxPendingPacketsPerResolution))
 	}
 
@@ -78,58 +110,58 @@ func (f *packetsPendingLinkResolution) enqueue(ch <-chan struct{}, r *Route, pro
 	})
 
 	if ok {
+		f.Unlock()
 		return
 	}
 
-	// Wait for the link-address resolution to complete.
-	cancel := f.newCancelChannelLocked()
-	go func() {
-		cancelled := false
-		select {
-		case <-ch:
-		case <-cancel:
-			cancelled = true
-		}
+	cancelledPackets := f.newCancelChannelLocked(ch)
+	f.Unlock()
 
-		f.Lock()
-		packets, ok := f.packets[ch]
-		delete(f.packets, ch)
-		f.Unlock()
-
-		if !ok {
-			panic(fmt.Sprintf("link-resolution goroutine woke up but no entry exists in the queue of packets"))
-		}
-
-		for _, p := range packets {
-			if cancelled || p.route.IsResolutionRequired() {
-				p.route.Stats().IP.OutgoingPacketErrors.Increment()
-
-				if linkResolvableEP, ok := p.route.outgoingNIC.getNetworkEndpoint(p.route.NetProto).(LinkResolvableNetworkEndpoint); ok {
-					linkResolvableEP.HandleLinkResolutionFailure(pkt)
-				}
-			} else {
-				p.route.outgoingNIC.writePacket(p.route, nil /* gso */, p.proto, p.pkt)
-			}
-			p.route.Release()
-		}
-	}()
+	if len(cancelledPackets) != 0 {
+		// Dequeue the packets in a different goroutine to not escape any locks that
+		// may be held to avoid holding them for longer than required.
+		go dequeuePackets(cancelledPackets, "", false)
+	}
 }
 
-// newCancelChannel creates a channel that can cancel a pending forwarding
-// activity. The oldest channel is closed if the number of open channels would
-// exceed maxPendingResolutions.
-func (f *packetsPendingLinkResolution) newCancelChannelLocked() chan struct{} {
-	if len(f.cancelChans) == maxPendingResolutions {
-		ch := f.cancelChans[0]
-		f.cancelChans[0] = nil
-		f.cancelChans = f.cancelChans[1:]
-		close(ch)
+// newCancelChannelLocked appends the link resolution channel to a FIFO. If the
+// max number of pending resolutions is reached, the oldest channel will be
+// removed and its associated pending packets will be returned.
+func (f *packetsPendingLinkResolution) newCancelChannelLocked(newCH <-chan struct{}) []pendingPacket {
+	f.cancelChans = append(f.cancelChans, newCH)
+	if len(f.cancelChans) <= maxPendingResolutions {
+		return nil
 	}
-	if l := len(f.cancelChans); l >= maxPendingResolutions {
+
+	ch := f.cancelChans[0]
+	f.cancelChans[0] = nil
+	f.cancelChans = f.cancelChans[1:]
+	if l := len(f.cancelChans); l > maxPendingResolutions {
 		panic(fmt.Sprintf("max pending resolutions reached; got %d active resolutions, max = %d", l, maxPendingResolutions))
 	}
 
-	ch := make(chan struct{})
-	f.cancelChans = append(f.cancelChans, ch)
-	return ch
+	packets, ok := f.packets[ch]
+	if !ok {
+		panic("must have a packet queue for an uncancelled channel")
+	}
+	delete(f.packets, ch)
+
+	return packets
+}
+
+func dequeuePackets(packets []pendingPacket, linkAddr tcpip.LinkAddress, success bool) {
+	for _, p := range packets {
+		if !success {
+			p.route.Stats().IP.OutgoingPacketErrors.Increment()
+
+			if linkResolvableEP, ok := p.route.outgoingNIC.getNetworkEndpoint(p.route.NetProto).(LinkResolvableNetworkEndpoint); ok {
+				linkResolvableEP.HandleLinkResolutionFailure(p.pkt)
+			}
+		} else {
+			routeInfo := p.route.Fields()
+			routeInfo.RemoteLinkAddress = linkAddr
+			p.route.outgoingNIC.writePacket(routeInfo, nil /* gso */, p.proto, p.pkt)
+		}
+		p.route.Release()
+	}
 }
