@@ -49,6 +49,8 @@ type NIC struct {
 	// Must be accessed using atomic operations.
 	enabled uint32
 
+	linkAddrCache *linkAddrCache
+
 	mu struct {
 		sync.RWMutex
 		spoofing    bool
@@ -133,6 +135,7 @@ func newNIC(stack *Stack, id tcpip.NICID, name string, ep LinkEndpoint, ctx NICC
 		context:          ctx,
 		stats:            makeNICStats(),
 		networkEndpoints: make(map[tcpip.NetworkProtocolNumber]NetworkEndpoint),
+		linkAddrCache:    newLinkAddrCache(ageLimit, resolutionTimeout, resolutionAttempts),
 	}
 	nic.mu.packetEPs = make(map[tcpip.NetworkProtocolNumber]*packetEndpointList)
 
@@ -553,7 +556,7 @@ func (n *NIC) getNeighborLinkAddress(addr, localAddr tcpip.Address, linkRes Link
 		return entry.LinkAddr, ch, err
 	}
 
-	return n.stack.linkAddrCache.get(tcpip.FullAddress{NIC: n.ID(), Addr: addr}, linkRes, localAddr, n, onResolve)
+	return n.linkAddrCache.get(addr, linkRes, localAddr, n, onResolve)
 }
 
 func (n *NIC) neighbors() ([]NeighborEntry, *tcpip.Error) {

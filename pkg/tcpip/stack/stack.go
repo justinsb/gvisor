@@ -382,8 +382,6 @@ type Stack struct {
 
 	stats tcpip.Stats
 
-	linkAddrCache *linkAddrCache
-
 	mu   sync.RWMutex
 	nics map[tcpip.NICID]*NIC
 
@@ -640,7 +638,6 @@ func New(opts Options) *Stack {
 		linkAddrResolvers:  make(map[tcpip.NetworkProtocolNumber]LinkAddressResolver),
 		nics:               make(map[tcpip.NICID]*NIC),
 		cleanupEndpoints:   make(map[TransportEndpoint]struct{}),
-		linkAddrCache:      newLinkAddrCache(ageLimit, resolutionTimeout, resolutionAttempts),
 		PortManager:        ports.NewPortManager(),
 		clock:              clock,
 		stats:              opts.Stats.FillIn(),
@@ -1511,12 +1508,17 @@ func (s *Stack) SetSpoofing(nicID tcpip.NICID, enable bool) *tcpip.Error {
 	return nil
 }
 
-// AddLinkAddress adds a link address to the stack link cache.
+// AddLinkAddress implements LinkAddressCache.
 func (s *Stack) AddLinkAddress(nicID tcpip.NICID, addr tcpip.Address, linkAddr tcpip.LinkAddress) {
-	fullAddr := tcpip.FullAddress{NIC: nicID, Addr: addr}
-	s.linkAddrCache.add(fullAddr, linkAddr)
-	// TODO: provide a way for a transport endpoint to receive a signal
-	// that AddLinkAddress for a particular address has been called.
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	nic, ok := s.nics[nicID]
+	if !ok {
+		return
+	}
+
+	nic.linkAddrCache.add(addr, linkAddr)
 }
 
 // GetLinkAddress finds the link address corresponding to a neighbor's address.
