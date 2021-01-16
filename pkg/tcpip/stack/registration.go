@@ -833,7 +833,7 @@ type LinkAddressCache interface {
 	// does not exist.
 	CheckLocalAddress(nicID tcpip.NICID, protocol tcpip.NetworkProtocolNumber, addr tcpip.Address) tcpip.NICID
 
-	// AddLinkAddress adds a link address to the cache.
+	// AddLinkAddress adds a link address to the NIC's link address cache.
 	AddLinkAddress(nicID tcpip.NICID, addr tcpip.Address, linkAddr tcpip.LinkAddress)
 }
 
