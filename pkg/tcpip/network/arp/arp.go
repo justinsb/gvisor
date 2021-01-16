@@ -19,8 +19,10 @@ package arp
 
 import (
 	"fmt"
+	"reflect"
 	"sync/atomic"
 
+	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
@@ -50,6 +52,7 @@ type endpoint struct {
 	nic           stack.NetworkInterface
 	linkAddrCache stack.LinkAddressCache
 	nud           stack.NUDHandler
+	stats         sharedStats
 }
 
 func (e *endpoint) Enable() *tcpip.Error {
@@ -98,7 +101,9 @@ func (e *endpoint) MaxHeaderLength() uint16 {
 	return e.nic.MaxHeaderLength() + header.ARPSize
 }
 
-func (*endpoint) Close() {}
+func (e *endpoint) Close() {
+	e.protocol.forgetEndpoint(e.nic.ID())
+}
 
 func (*endpoint) WritePacket(*stack.Route, *stack.GSO, stack.NetworkHeaderParams, *stack.PacketBuffer) *tcpip.Error {
 	return tcpip.ErrNotSupported
@@ -119,28 +124,28 @@ func (*endpoint) WriteHeaderIncludedPacket(*stack.Route, *stack.PacketBuffer) *t
 }
 
 func (e *endpoint) HandlePacket(pkt *stack.PacketBuffer) {
-	stats := e.protocol.stack.Stats().ARP
-	stats.PacketsReceived.Increment()
+	stats := e.stats.arp
+	stats.packetsReceived.Increment()
 
 	if !e.isEnabled() {
-		stats.DisabledPacketsReceived.Increment()
+		stats.disabledPacketsReceived.Increment()
 		return
 	}
 
 	h := header.ARP(pkt.NetworkHeader().View())
 	if !h.IsValid() {
-		stats.MalformedPacketsReceived.Increment()
+		stats.malformedPacketsReceived.Increment()
 		return
 	}
 
 	switch h.Op() {
 	case header.ARPRequest:
-		stats.RequestsReceived.Increment()
+		stats.requestsReceived.Increment()
 		localAddr := tcpip.Address(h.ProtocolAddressTarget())
 
 		if e.nud == nil {
 			if e.linkAddrCache.CheckLocalAddress(e.nic.ID(), header.IPv4ProtocolNumber, localAddr) == 0 {
-				stats.RequestsReceivedUnknownTargetAddress.Increment()
+				stats.requestsReceivedUnknownTargetAddress.Increment()
 				return // we have no useful answer, ignore the request
 			}
 
@@ -149,7 +154,7 @@ func (e *endpoint) HandlePacket(pkt *stack.PacketBuffer) {
 			e.linkAddrCache.AddLinkAddress(e.nic.ID(), addr, linkAddr)
 		} else {
 			if e.protocol.stack.CheckLocalAddress(e.nic.ID(), header.IPv4ProtocolNumber, localAddr) == 0 {
-				stats.RequestsReceivedUnknownTargetAddress.Increment()
+				stats.requestsReceivedUnknownTargetAddress.Increment()
 				return // we have no useful answer, ignore the request
 			}
 
@@ -186,13 +191,13 @@ func (e *endpoint) HandlePacket(pkt *stack.PacketBuffer) {
 		//   Send the packet to the (new) target hardware address on the same
 		//   hardware on which the request was received.
 		if err := e.nic.WritePacketToRemote(tcpip.LinkAddress(origSender), nil /* gso */, ProtocolNumber, respPkt); err != nil {
-			stats.OutgoingRepliesDropped.Increment()
+			stats.outgoingRepliesDropped.Increment()
 		} else {
-			stats.OutgoingRepliesSent.Increment()
+			stats.outgoingRepliesSent.Increment()
 		}
 
 	case header.ARPReply:
-		stats.RepliesReceived.Increment()
+		stats.repliesReceived.Increment()
 		addr := tcpip.Address(h.ProtocolAddressSender())
 		linkAddr := tcpip.LinkAddress(h.HardwareAddressSender())
 
@@ -216,9 +221,22 @@ func (e *endpoint) HandlePacket(pkt *stack.PacketBuffer) {
 	}
 }
 
+// Stats implements stack.NetworkEndpoint.
+func (e *endpoint) Stats() stack.NetworkEndpointStats {
+	return &e.stats.localStats
+}
+
 // protocol implements stack.NetworkProtocol and stack.LinkAddressResolver.
 type protocol struct {
 	stack *stack.Stack
+
+	mu struct {
+		sync.RWMutex
+
+		// eps is keyed by NICID to allow protocol methods to retrieve the correct
+		// endpoint depending on the NIC.
+		eps map[tcpip.NICID]*endpoint
+	}
 }
 
 func (p *protocol) Number() tcpip.NetworkProtocolNumber { return ProtocolNumber }
@@ -236,7 +254,23 @@ func (p *protocol) NewEndpoint(nic stack.NetworkInterface, linkAddrCache stack.L
 		linkAddrCache: linkAddrCache,
 		nud:           nud,
 	}
+
+	tcpip.InitStatCounters(reflect.ValueOf(&e.stats.localStats).Elem())
+
+	stackStats := p.stack.Stats()
+	e.stats.arp.init(&e.stats.localStats.ARP, &stackStats.ARP)
+
+	p.mu.Lock()
+	p.mu.eps[nic.ID()] = e
+	p.mu.Unlock()
+
 	return e
+}
+
+func (p *protocol) forgetEndpoint(nicID tcpip.NICID) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.mu.eps, nicID)
 }
 
 // LinkAddressProtocol implements stack.LinkAddressResolver.LinkAddressProtocol.
@@ -246,28 +280,35 @@ func (*protocol) LinkAddressProtocol() tcpip.NetworkProtocolNumber {
 
 // LinkAddressRequest implements stack.LinkAddressResolver.LinkAddressRequest.
 func (p *protocol) LinkAddressRequest(targetAddr, localAddr tcpip.Address, remoteLinkAddr tcpip.LinkAddress, nic stack.NetworkInterface) *tcpip.Error {
-	stats := p.stack.Stats().ARP
+	nicID := nic.ID()
+
+	p.mu.Lock()
+	netEP, ok := p.mu.eps[nic.ID()]
+	p.mu.Unlock()
+	if !ok {
+		return tcpip.ErrUnknownNICID
+	}
+
+	stats := netEP.stats.arp
 
 	if len(remoteLinkAddr) == 0 {
 		remoteLinkAddr = header.EthernetBroadcastAddress
 	}
 
-	nicID := nic.ID()
 	if len(localAddr) == 0 {
 		addr, err := p.stack.GetMainNICAddress(nicID, header.IPv4ProtocolNumber)
 		if err != nil {
-			stats.OutgoingRequestInterfaceHasNoLocalAddressErrors.Increment()
-			return err
+			return tcpip.ErrUnknownNICID
 		}
 
 		if len(addr.Address) == 0 {
-			stats.OutgoingRequestNetworkUnreachableErrors.Increment()
+			stats.outgoingRequestNetworkUnreachableErrors.Increment()
 			return tcpip.ErrNetworkUnreachable
 		}
 
 		localAddr = addr.Address
 	} else if p.stack.CheckLocalAddress(nicID, header.IPv4ProtocolNumber, localAddr) == 0 {
-		stats.OutgoingRequestBadLocalAddressErrors.Increment()
+		stats.outgoingRequestBadLocalAddressErrors.Increment()
 		return tcpip.ErrBadLocalAddress
 	}
 
@@ -288,10 +329,10 @@ func (p *protocol) LinkAddressRequest(targetAddr, localAddr tcpip.Address, remot
 		panic(fmt.Sprintf("copied %d bytes, expected %d bytes", n, header.IPv4AddressSize))
 	}
 	if err := nic.WritePacketToRemote(remoteLinkAddr, nil /* gso */, ProtocolNumber, pkt); err != nil {
-		stats.OutgoingRequestsDropped.Increment()
+		stats.outgoingRequestsDropped.Increment()
 		return err
 	}
-	stats.OutgoingRequestsSent.Increment()
+	stats.outgoingRequestsSent.Increment()
 	return nil
 }
 
@@ -329,5 +370,7 @@ func (*protocol) Parse(pkt *stack.PacketBuffer) (proto tcpip.TransportProtocolNu
 
 // NewProtocol returns an ARP network protocol.
 func NewProtocol(s *stack.Stack) stack.NetworkProtocol {
-	return &protocol{stack: s}
+	p := &protocol{stack: s}
+	p.mu.eps = make(map[tcpip.NICID]*endpoint)
+	return p
 }

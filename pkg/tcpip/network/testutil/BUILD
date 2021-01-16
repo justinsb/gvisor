@@ -6,8 +6,10 @@ go_library(
     name = "testutil",
     srcs = [
         "testutil.go",
+        "testutil_unsafe.go",
     ],
     visibility = [
+        "//pkg/tcpip/network/arp:__pkg__",
         "//pkg/tcpip/network/fragmentation:__pkg__",
         "//pkg/tcpip/network/ipv4:__pkg__",
         "//pkg/tcpip/network/ipv6:__pkg__",
