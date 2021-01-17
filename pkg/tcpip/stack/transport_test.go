@@ -15,7 +15,9 @@
 package stack_test
 
 import (
+	"bytes"
 	"io"
+	"io/ioutil"
 	"testing"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -90,15 +92,16 @@ func (*fakeTransportEndpoint) Read(io.Writer, tcpip.ReadOptions) (tcpip.ReadResu
 	return tcpip.ReadResult{}, nil
 }
 
-func (f *fakeTransportEndpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
+func (f *fakeTransportEndpoint) Write(r io.Reader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
 	if len(f.route.RemoteAddress) == 0 {
 		return 0, tcpip.ErrNoRoute
 	}
 
-	v, err := p.FullPayload()
+	v, err := ioutil.ReadAll(r)
 	if err != nil {
-		return 0, err
+		return 0, tcpip.ErrBadBuffer
 	}
+
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
 		ReserveHeaderBytes: int(f.route.MaxHeaderLength()) + fakeTransHeaderLen,
 		Data:               buffer.View(v).ToVectorisedView(),
@@ -520,8 +523,10 @@ func TestTransportSend(t *testing.T) {
 	}
 
 	// Create buffer that will hold the payload.
-	view := buffer.NewView(30)
-	if _, err := ep.Write(tcpip.SlicePayload(view), tcpip.WriteOptions{}); err != nil {
+	b := make([]byte, 30)
+	var r bytes.Reader
+	r.Reset(b)
+	if _, err := ep.Write(&r, tcpip.WriteOptions{}); err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
 

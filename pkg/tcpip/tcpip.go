@@ -466,36 +466,6 @@ type FullAddress struct {
 	Port uint16
 }
 
-// Payloader is an interface that provides data.
-//
-// This interface allows the endpoint to request the amount of data it needs
-// based on internal buffers without exposing them.
-type Payloader interface {
-	// FullPayload returns all available bytes.
-	FullPayload() ([]byte, *Error)
-
-	// Payload returns a slice containing at most size bytes.
-	Payload(size int) ([]byte, *Error)
-}
-
-// SlicePayload implements Payloader for slices.
-//
-// This is typically used for tests.
-type SlicePayload []byte
-
-// FullPayload implements Payloader.FullPayload.
-func (s SlicePayload) FullPayload() ([]byte, *Error) {
-	return s, nil
-}
-
-// Payload implements Payloader.Payload.
-func (s SlicePayload) Payload(size int) ([]byte, *Error) {
-	if size > len(s) {
-		size = len(s)
-	}
-	return s[:size], nil
-}
-
 var _ io.Writer = (*SliceWriter)(nil)
 
 // SliceWriter implements io.Writer for slices.
@@ -652,17 +622,12 @@ type Endpoint interface {
 	// Write writes data to the endpoint's peer. This method does not block if
 	// the data cannot be written.
 	//
-	// Unlike io.Writer.Write, Endpoint.Write transfers ownership of any bytes
-	// successfully written to the Endpoint. That is, if a call to
-	// Write(SlicePayload{data}) returns (n, err), it may retain data[:n], and
-	// the caller should not use data[:n] after Write returns.
-	//
 	// Note that unlike io.Writer.Write, it is not an error for Write to
 	// perform a partial write (if n > 0, no error may be returned). Only
 	// stream (TCP) Endpoints may return partial writes, and even then only
 	// in the case where writing additional data would block. Other Endpoints
 	// will either write the entire message or return an error.
-	Write(Payloader, WriteOptions) (int64, *Error)
+	Write(io.Reader, WriteOptions) (int64, *Error)
 
 	// Connect connects the endpoint to its peer. Specifying a NIC is
 	// optional.

@@ -17,6 +17,7 @@ package udp
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"sync/atomic"
 
 	"gvisor.dev/gvisor/pkg/sync"
@@ -417,8 +418,8 @@ func (e *endpoint) connectRoute(nicID tcpip.NICID, addr tcpip.FullAddress, netPr
 
 // Write writes data to the endpoint's peer. This method does not block
 // if the data cannot be written.
-func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
-	n, err := e.write(p, opts)
+func (e *endpoint) Write(r io.Reader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
+	n, err := e.write(r, opts)
 	switch err {
 	case nil:
 		e.stats.PacketsSent.Increment()
@@ -438,7 +439,7 @@ func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tc
 	return n, err
 }
 
-func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
+func (e *endpoint) write(r io.Reader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
 	if err := e.LastError(); err != nil {
 		return 0, err
 	}
@@ -514,9 +515,13 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tc
 		return 0, tcpip.ErrBroadcastDisabled
 	}
 
-	v, err := p.FullPayload()
-	if err != nil {
-		return 0, err
+	var v []byte
+	{
+		var err error
+		v, err = ioutil.ReadAll(r)
+		if err != nil {
+			return 0, tcpip.ErrBadBuffer
+		}
 	}
 	if len(v) > header.UDPMaximumPacketSize {
 		// Payload can't possibly fit in a packet.

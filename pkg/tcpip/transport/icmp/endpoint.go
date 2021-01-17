@@ -16,6 +16,7 @@ package icmp
 
 import (
 	"io"
+	"io/ioutil"
 
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -236,8 +237,8 @@ func (e *endpoint) prepareForWrite(to *tcpip.FullAddress) (retry bool, err *tcpi
 
 // Write writes data to the endpoint's peer. This method does not block
 // if the data cannot be written.
-func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
-	n, err := e.write(p, opts)
+func (e *endpoint) Write(r io.Reader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
+	n, err := e.write(r, opts)
 	switch err {
 	case nil:
 		e.stats.PacketsSent.Increment()
@@ -257,7 +258,7 @@ func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tc
 	return n, err
 }
 
-func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
+func (e *endpoint) write(r io.Reader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
 	// MSG_MORE is unimplemented. (This also means that MSG_EOR is a no-op.)
 	if opts.More {
 		return 0, tcpip.ErrInvalidOptionValue
@@ -313,11 +314,16 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tc
 		route = r
 	}
 
-	v, err := p.FullPayload()
-	if err != nil {
-		return 0, err
+	var v []byte
+	{
+		var err error
+		v, err = ioutil.ReadAll(r)
+		if err != nil {
+			return 0, tcpip.ErrBadBuffer
+		}
 	}
 
+	var err *tcpip.Error
 	switch e.NetProto {
 	case header.IPv4ProtocolNumber:
 		err = send4(route, e.ID.LocalPort, v, e.ttl, e.owner)

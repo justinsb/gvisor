@@ -42,6 +42,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"log"
 	"math/rand"
@@ -51,7 +52,6 @@ import (
 	"time"
 
 	"gvisor.dev/gvisor/pkg/tcpip"
-	"gvisor.dev/gvisor/pkg/tcpip/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/link/fdbased"
 	"gvisor.dev/gvisor/pkg/tcpip/link/rawfile"
@@ -71,24 +71,28 @@ func writer(ch chan struct{}, ep tcpip.Endpoint) {
 		close(ch)
 	}()
 
-	r := bufio.NewReader(os.Stdin)
-	for {
-		v := buffer.NewView(1024)
-		n, err := r.Read(v)
-		if err != nil {
-			return
-		}
-
-		v.CapLength(n)
-		for len(v) > 0 {
-			n, err := ep.Write(tcpip.SlicePayload(v), tcpip.WriteOptions{})
+	stdin := bufio.NewReader(os.Stdin)
+	var r bytes.Reader
+	if err := func() error {
+		for {
+			v, err := stdin.Peek(1024)
 			if err != nil {
-				fmt.Println("Write failed:", err)
-				return
+				return err
 			}
-
-			v.TrimFront(int(n))
+			r.Reset(v)
+			{
+				n, err := ep.Write(&r, tcpip.WriteOptions{})
+				if err != nil {
+					return fmt.Errorf("ep.Write failed: %s", err)
+				}
+				if d, err := stdin.Discard(int(n)); err != nil {
+					return fmt.Errorf("discarded %d/%d: %s", d, n, err)
+				}
+			}
 		}
+	}(); err != nil {
+		fmt.Println(err)
+		return
 	}
 }
 

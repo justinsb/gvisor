@@ -28,6 +28,7 @@ package raw
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 
 	"gvisor.dev/gvisor/pkg/sync"
 	"gvisor.dev/gvisor/pkg/tcpip"
@@ -234,7 +235,7 @@ func (e *endpoint) Read(dst io.Writer, opts tcpip.ReadOptions) (tcpip.ReadResult
 }
 
 // Write implements tcpip.Endpoint.Write.
-func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
+func (e *endpoint) Write(r io.Reader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
 	// We can create, but not write to, unassociated IPv6 endpoints.
 	if !e.associated && e.TransportEndpointInfo.NetProto == header.IPv6ProtocolNumber {
 		return 0, tcpip.ErrInvalidOptionValue
@@ -247,7 +248,7 @@ func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tc
 		}
 	}
 
-	n, err := e.write(p, opts)
+	n, err := e.write(r, opts)
 	switch err {
 	case nil:
 		e.stats.PacketsSent.Increment()
@@ -267,7 +268,7 @@ func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tc
 	return n, err
 }
 
-func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
+func (e *endpoint) write(r io.Reader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
 	// MSG_MORE is unimplemented. This also means that MSG_EOR is a no-op.
 	if opts.More {
 		return 0, tcpip.ErrInvalidOptionValue
@@ -280,9 +281,13 @@ func (e *endpoint) write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tc
 		return 0, tcpip.ErrInvalidEndpointState
 	}
 
-	payloadBytes, err := p.FullPayload()
-	if err != nil {
-		return 0, err
+	var payloadBytes []byte
+	{
+		var err error
+		payloadBytes, err = ioutil.ReadAll(r)
+		if err != nil {
+			return 0, tcpip.ErrBadBuffer
+		}
 	}
 
 	// If this is an unassociated socket and callee provided a nonzero

@@ -1507,7 +1507,7 @@ func (e *endpoint) isEndpointWritableLocked() (int, *tcpip.Error) {
 }
 
 // Write writes data to the endpoint's peer.
-func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
+func (e *endpoint) Write(r io.Reader, opts tcpip.WriteOptions) (int64, *tcpip.Error) {
 	// Linux completely ignores any address passed to sendto(2) for TCP sockets
 	// (without the MSG_FASTOPEN flag). Corking is unimplemented, so opts.More
 	// and opts.EndOfRecord are also ignored.
@@ -1534,14 +1534,15 @@ func (e *endpoint) Write(p tcpip.Payloader, opts tcpip.WriteOptions) (int64, *tc
 	}
 
 	// Fetch data.
-	v, perr := p.Payload(avail)
-	if perr != nil || len(v) == 0 {
-		// Note that perr may be nil if len(v) == 0.
+	v := make([]byte, avail)
+	n, _ := io.ReadFull(r, v)
+	v = v[:n]
+	if len(v) == 0 {
 		if opts.Atomic {
 			e.sndBufMu.Unlock()
 			e.UnlockUser()
 		}
-		return 0, perr
+		return 0, tcpip.ErrBadBuffer
 	}
 
 	if !opts.Atomic {

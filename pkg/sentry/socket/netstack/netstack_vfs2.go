@@ -129,8 +129,8 @@ func (s *SocketVFS2) Write(ctx context.Context, src usermem.IOSequence, opts vfs
 		return 0, syserror.EOPNOTSUPP
 	}
 
-	f := &ioSequencePayload{ctx: ctx, src: src}
-	n, err := s.Endpoint.Write(f, tcpip.WriteOptions{})
+	r := src.Reader(ctx)
+	n, err := s.Endpoint.Write(r, tcpip.WriteOptions{})
 	if err == tcpip.ErrWouldBlock {
 		return 0, syserror.ErrWouldBlock
 	}
