@@ -6,10 +6,10 @@ package(licenses = ["notice"])
 go_template(
     name = "defs_amd64",
     srcs = [
-        "defs.go",
-        "defs_amd64.go",
-        "offsets_amd64.go",
-        "x86.go",
+        "defs.gotemplate",
+        "defs_amd64.gotemplate",
+        "offsets_amd64.gotemplate",
+        "x86.gotemplate",
     ],
     visibility = [":__subpackages__"],
 )
@@ -17,10 +17,10 @@ go_template(
 go_template(
     name = "defs_arm64",
     srcs = [
-        "aarch64.go",
-        "defs.go",
-        "defs_arm64.go",
-        "offsets_arm64.go",
+        "aarch64.gotemplate",
+        "defs.gotemplate",
+        "defs_arm64.gotemplate",
+        "offsets_arm64.gotemplate",
     ],
     visibility = [":__subpackages__"],
 )
@@ -41,9 +41,9 @@ go_template_instance(
 
 arch_genrule(
     name = "entry_impl_amd64",
-    srcs = ["entry_amd64.s"],
+    srcs = ["entry_amd64.stemplate"],
     outs = ["entry_impl_amd64.s"],
-    cmd = "(echo -e '// build +amd64\\n' && QEMU $(location //pkg/sentry/platform/ring0/gen_offsets) && cat $(location entry_amd64.s)) > $@",
+    cmd = "(echo -e '// build +amd64\\n' && QEMU $(location //pkg/sentry/platform/ring0/gen_offsets) && cat $(location entry_amd64.stemplate)) > $@",
     tools = ["//pkg/sentry/platform/ring0/gen_offsets"],
 )
 

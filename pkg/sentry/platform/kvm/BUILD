@@ -87,7 +87,7 @@ go_test(
 
 genrule(
     name = "bluepill_impl_amd64",
-    srcs = ["bluepill_amd64.s"],
+    srcs = ["bluepill_amd64.stemplate"],
     outs = ["bluepill_impl_amd64.s"],
     cmd = "(echo -e '// build +amd64\\n' && $(location //pkg/sentry/platform/ring0/gen_offsets) && cat $(SRCS)) > $@",
     tools = ["//pkg/sentry/platform/ring0/gen_offsets"],

@@ -10,7 +10,7 @@ exports_files(["LICENSE"])
 
 go_template(
     name = "generic_atomicptr",
-    srcs = ["generic_atomicptr_unsafe.go"],
+    srcs = ["generic_atomicptr_unsafe.gotemplate"],
     types = [
         "Value",
     ],
@@ -18,7 +18,7 @@ go_template(
 
 go_template(
     name = "generic_atomicptrmap",
-    srcs = ["generic_atomicptrmap_unsafe.go"],
+    srcs = ["generic_atomicptrmap_unsafe.gotemplate"],
     opt_consts = [
         "ShardOrder",
     ],
@@ -37,7 +37,7 @@ go_template(
 
 go_template(
     name = "generic_seqatomic",
-    srcs = ["generic_seqatomic_unsafe.go"],
+    srcs = ["generic_seqatomic_unsafe.gotemplate"],
     types = [
         "Value",
     ],

@@ -6,7 +6,7 @@ package(licenses = ["notice"])
 go_template(
     name = "refs_template",
     srcs = [
-        "refs_template.go",
+        "refs_template.gotemplate",
     ],
     opt_consts = [
         "enableLogging",

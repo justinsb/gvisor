@@ -5,9 +5,11 @@ set -e
 function copy_dir() {
     DIR=${1}
     mkdir -p ${DIR}/
-    cp -r bazel-gvisor/bazel-out/k8-fastbuild-ST-4c64f0b3d5c7/bin/${DIR}_/gvisor.dev/gvisor/${DIR}/* ${DIR}/
+    cp -r bazel-gvisor/bazel-out/k8-fastbuild/bin/${DIR}_/gvisor.dev/gvisor/${DIR}/* ${DIR}/
     chmod 644 ${DIR}/*
 }
+
+bazel build //runsc //pkg/sentry/kernel/memevent //pkg/sentry/strace //test/packetimpact/proto:*
 
 copy_dir "pkg/metric/metric_go_proto"
 copy_dir "pkg/sentry/kernel/uncaught_signal_go_proto"
@@ -15,6 +17,8 @@ copy_dir "pkg/sentry/strace/strace_go_proto"
 copy_dir "pkg/eventchannel/eventchannel_go_proto"
 copy_dir "pkg/sentry/arch/registers_go_proto"
 copy_dir "pkg/sentry/unimpl/unimplemented_syscall_go_proto"
+copy_dir "pkg/sentry/kernel/memevent/memory_events_go_proto"
+copy_dir "test/packetimpact/proto/posix_server_go_proto"
 
 # mkdir -p pkg/sentry/kernel/uncaught_signal_go_proto/
 # cp -r bazel-gvisor/bazel-out/k8-fastbuild-ST-4c64f0b3d5c7/bin/pkg/sentry/kernel/uncaught_signal_go_proto_/gvisor.dev/gvisor/pkg/sentry/kernel/uncaught_signal_go_proto/* \

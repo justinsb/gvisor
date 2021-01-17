@@ -19,7 +19,7 @@ go_library(
 
 go_template(
     name = "bits_template",
-    srcs = ["bits_template.go"],
+    srcs = ["bits_template.gotemplate"],
     types = [
         "T",
     ],
